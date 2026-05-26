@@ -48,6 +48,7 @@ rm -f ${TARGET_DIR}/etc/init.d/S99iiod
 rm -Rf ${TARGET_DIR}/etc/dropbear
 
 mkdir -p ${TARGET_DIR}/www/img
+mkdir -p ${TARGET_DIR}/www/rte
 mkdir -p ${TARGET_DIR}/etc/wpa_supplicant/
 mkdir -p ${TARGET_DIR}/mnt/jffs2
 mkdir -p ${TARGET_DIR}/mnt/msd
@@ -65,6 +66,7 @@ ${INSTALL} -D -m 0755 ${BOARD_DIR}/S23udc ${TARGET_DIR}/etc/init.d/
 ${INSTALL} -D -m 0755 ${BOARD_DIR}/S40network ${TARGET_DIR}/etc/init.d/
 ${INSTALL} -D -m 0755 ${BOARD_DIR}/S41network ${TARGET_DIR}/etc/init.d/
 ${INSTALL} -D -m 0755 ${BOARD_DIR}/S45msd ${TARGET_DIR}/etc/init.d/
+${INSTALL} -D -m 0755 ${BOARD_DIR}/S60rte-httpd ${TARGET_DIR}/etc/init.d/
 ${INSTALL} -D -m 0755 ${BOARD_DIR}/S98autostart ${TARGET_DIR}/etc/init.d/
 ${INSTALL} -D -m 0644 ${BOARD_DIR}/fw_env.config ${TARGET_DIR}/etc/
 ${INSTALL} -D -m 0644 ${BOARD_DIR}/VERSIONS ${TARGET_DIR}/opt/
@@ -82,6 +84,9 @@ ${INSTALL} -D -m 0644 ${BOARD_DIR}/input-event-daemon.conf ${TARGET_DIR}/etc/
 
 ${INSTALL} -D -m 0644 ${BOARD_DIR}/msd/img/* ${TARGET_DIR}/www/img/
 ${INSTALL} -D -m 0644 ${BOARD_DIR}/msd/*.html ${TARGET_DIR}/www/
+
+${INSTALL} -D -m 0755 ${BOARD_DIR}/rte-httpd ${TARGET_DIR}/usr/bin/rte-httpd
+cp -a ${BOARD_DIR}/../../../rte-httpd/static/. ${TARGET_DIR}/www/rte/
 
 ${INSTALL} -D -m 0755 ${BOARD_DIR}/wpa_supplicant/* ${TARGET_DIR}/etc/wpa_supplicant/
 
