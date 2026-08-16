@@ -1,0 +1,211 @@
+#!/bin/sh
+
+DAEMON=/usr/sbin/rte-httpd
+PIDFILE=/run/rte-httpd.pid
+
+RTE_HTTPD_LISTEN_URL=""
+RTE_HTTPD_PORT="8080"
+RTE_HTTPD_DEVICE="/dev/mwipcore0"
+RTE_HTTPD_WEB_ROOT="/usr/share/rte-control/www"
+RTE_HTTPD_STATE="/mnt/jffs2/rte/last-config.json"
+RTE_HTTPD_PERSIST="1"
+RTE_HTTPD_LOG_LEVEL=""
+RTE_HTTPD_READY_ATTEMPTS=50
+RTE_HTTPD_HARDWARE_ATTEMPTS=50
+
+[ -r /etc/default/rte-httpd ] && . /etc/default/rte-httpd
+
+read_daemon_pid() {
+	DAEMON_PID=""
+	[ -r "$PIDFILE" ] || return 1
+	read DAEMON_PID < "$PIDFILE"
+	case "$DAEMON_PID" in
+		""|*[!0-9]*) return 1 ;;
+	esac
+	return 0
+}
+
+daemon_process_is_running() {
+	read_daemon_pid || return 1
+	[ -d "/proc/$DAEMON_PID" ] || return 1
+	DAEMON_EXE=`readlink "/proc/$DAEMON_PID/exe" 2>/dev/null` || return 1
+	[ "$DAEMON_EXE" = "$DAEMON" ]
+}
+
+ad936x_is_present() {
+	grep -q '^ad9361-phy$' \
+		/sys/bus/iio/devices/iio:device*/name 2>/dev/null
+}
+
+wait_for_hardware() {
+	attempt=0
+	while [ "$attempt" -lt "$RTE_HTTPD_HARDWARE_ATTEMPTS" ]; do
+		if [ -c "$RTE_HTTPD_DEVICE" ] && ad936x_is_present; then
+			return 0
+		fi
+		attempt=$((attempt + 1))
+		sleep 0.1
+	done
+	return 1
+}
+
+jffs2_is_mounted_rw() {
+	awk '
+		$2 == "/mnt/jffs2" && $3 == "jffs2" {
+			n = split($4, options, ",")
+			for (i = 1; i <= n; i++)
+				if (options[i] == "rw")
+					found = 1
+		}
+		END { exit found ? 0 : 1 }
+	' /proc/mounts
+}
+
+valid_ipv4_address() {
+	printf '%s\n' "$1" | awk -F. '
+		BEGIN { valid = 1 }
+		NR > 1 { valid = 0; exit }
+		NF != 4 { valid = 0; exit }
+		{
+			nonzero = 0
+			for (i = 1; i <= 4; i++) {
+				if ($i !~ /^[0-9]+$/ || $i + 0 > 255) {
+					valid = 0
+					exit
+				}
+				if ($i + 0 != 0)
+					nonzero = 1
+			}
+		}
+		END { exit valid && NR == 1 && nonzero ? 0 : 1 }
+	'
+}
+
+daemon_is_ready() {
+	daemon_process_is_running || return 1
+	wget -q -T 1 -O - "${RTE_HTTPD_LISTEN_URL%/}/healthz" \
+		2>/dev/null | grep -q '"status":"ok"'
+}
+
+wait_for_readiness() {
+	attempt=0
+	while [ "$attempt" -lt "$RTE_HTTPD_READY_ATTEMPTS" ]; do
+		daemon_is_ready && return 0
+		attempt=$((attempt + 1))
+		sleep 0.1
+	done
+	return 1
+}
+
+stop_running_daemon() {
+	if ! daemon_process_is_running; then
+		rm -f "$PIDFILE"
+		return 0
+	fi
+
+	start-stop-daemon -K -q -p "$PIDFILE" -x "$DAEMON" \
+		-R TERM/5/KILL/1
+	status=$?
+	if daemon_process_is_running; then
+		[ "$status" -ne 0 ] && return "$status"
+		return 1
+	fi
+	rm -f "$PIDFILE"
+	return 0
+}
+
+do_start() {
+	if daemon_process_is_running; then
+		printf 'Starting RTE control daemon: '
+		if daemon_is_ready; then
+			echo 'OK (already running)'
+			return 0
+		fi
+		echo 'FAIL (running but not ready)'
+		return 1
+	fi
+	rm -f "$PIDFILE"
+
+	printf 'Starting RTE control daemon: '
+	if [ -z "$RTE_HTTPD_WEB_ROOT" ] || [ ! -d "$RTE_HTTPD_WEB_ROOT" ]; then
+		echo "FAIL (web root missing: ${RTE_HTTPD_WEB_ROOT:-empty})"
+		return 1
+	fi
+	if ! wait_for_hardware; then
+		if [ ! -c "$RTE_HTTPD_DEVICE" ]; then
+			echo "FAIL ($RTE_HTTPD_DEVICE missing)"
+		else
+			echo 'FAIL (ad9361-phy missing)'
+		fi
+		return 1
+	fi
+
+	if [ -z "$RTE_HTTPD_LISTEN_URL" ]; then
+		USB_IP=`fw_printenv -n ipaddr 2>/dev/null` || USB_IP=""
+		valid_ipv4_address "$USB_IP" || USB_IP="192.168.2.1"
+		RTE_HTTPD_LISTEN_URL="http://$USB_IP:$RTE_HTTPD_PORT"
+	fi
+
+	set -- --listen "$RTE_HTTPD_LISTEN_URL" --device "$RTE_HTTPD_DEVICE" \
+		--web-root "$RTE_HTTPD_WEB_ROOT"
+	if [ "$RTE_HTTPD_PERSIST" = "1" ] && \
+	   [ -n "$RTE_HTTPD_STATE" ] && jffs2_is_mounted_rw; then
+		set -- "$@" --state "$RTE_HTTPD_STATE"
+	else
+		set -- "$@" --no-persist
+		if [ "$RTE_HTTPD_PERSIST" = "1" ]; then
+			echo
+			echo 'rte-httpd: writable JFFS2 is unavailable; persistence disabled'
+			printf 'Starting RTE control daemon: '
+		fi
+	fi
+	if [ -n "$RTE_HTTPD_LOG_LEVEL" ]; then
+		set -- "$@" --log-level "$RTE_HTTPD_LOG_LEVEL"
+	fi
+
+	start-stop-daemon -S -b -q -m -p "$PIDFILE" -x "$DAEMON" -- "$@"
+	status=$?
+	if [ "$status" -ne 0 ]; then
+		echo "FAIL (start-stop-daemon status $status)"
+		return "$status"
+	fi
+	if ! wait_for_readiness; then
+		stop_running_daemon >/dev/null 2>&1
+		echo 'FAIL (health check timed out)'
+		return 1
+	fi
+	echo 'OK'
+	return 0
+}
+
+do_stop() {
+	printf 'Stopping RTE control daemon: '
+	stop_running_daemon
+	status=$?
+	if [ "$status" -eq 0 ]; then
+		echo 'OK'
+		return 0
+	fi
+	echo "FAIL (status $status)"
+	return "$status"
+}
+
+case "$1" in
+	start)
+		do_start
+		exit $?
+		;;
+	stop)
+		do_stop
+		exit $?
+		;;
+	restart|reload)
+		do_stop || exit $?
+		do_start
+		exit $?
+		;;
+	*)
+		echo "Usage: $0 {start|stop|restart|reload}"
+		exit 1
+		;;
+esac
