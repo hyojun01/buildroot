@@ -61,7 +61,22 @@ ${INSTALL} -D -m 0755 ${BOARD_DIR}/S10mdev ${TARGET_DIR}/etc/init.d/
 ${INSTALL} -D -m 0755 ${BOARD_DIR}/S15watchdog ${TARGET_DIR}/etc/init.d/
 ${INSTALL} -D -m 0755 ${BOARD_DIR}/S20urandom ${TARGET_DIR}/etc/init.d/
 ${INSTALL} -D -m 0755 ${BOARD_DIR}/S21misc ${TARGET_DIR}/etc/init.d/
-${INSTALL} -D -m 0755 ${BOARD_DIR}/S23udc ${TARGET_DIR}/etc/init.d/
+if [ "${BR2_PACKAGE_RTE_CONTROL:-n}" != "y" ]; then
+	rm -f "${TARGET_DIR}/etc/init.d/S60rte-httpd"
+	rm -f "${TARGET_DIR}/etc/default/rte-httpd"
+	rm -f "${TARGET_DIR}/usr/sbin/rte-httpd"
+	rm -f "${TARGET_DIR}/usr/bin/rte-regtool"
+	rm -rf "${TARGET_DIR}/usr/share/rte-control"
+	${INSTALL} -D -m 0755 ${BOARD_DIR}/S23udc ${TARGET_DIR}/etc/init.d/
+else
+	# A Buildroot reconfiguration does not remove files installed by packages
+	# that were subsequently disabled. Keep the RTE image single-owner even
+	# when it is rebuilt on top of an existing Pluto output tree.
+	rm -f "${TARGET_DIR}"/usr/bin/iio_*
+	rm -f "${TARGET_DIR}"/usr/sbin/iiod
+	rm -f "${TARGET_DIR}"/usr/lib/libad9361.so*
+	rm -f "${TARGET_DIR}"/usr/lib/libmongoose.so*
+fi
 ${INSTALL} -D -m 0755 ${BOARD_DIR}/S40network ${TARGET_DIR}/etc/init.d/
 ${INSTALL} -D -m 0755 ${BOARD_DIR}/S41network ${TARGET_DIR}/etc/init.d/
 ${INSTALL} -D -m 0755 ${BOARD_DIR}/S45msd ${TARGET_DIR}/etc/init.d/
